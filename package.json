@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "workspaces": [
+    "@christinecha/base",
+    "@christinecha/ui"
+  ],
+  "dependencies": {
+    "typescript": "^5.0.4"
+  }
+}
