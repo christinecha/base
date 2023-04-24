@@ -6,6 +6,7 @@ import {
   Auth,
   setPersistence,
   browserLocalPersistence,
+  connectAuthEmulator,
 } from "firebase/auth";
 import {
   doc,
@@ -20,8 +21,11 @@ import {
   orderBy,
   updateDoc,
   getDoc,
-  addDoc,
   setDoc,
+  deleteDoc,
+  connectFirestoreEmulator,
+  arrayUnion,
+  arrayRemove,
 } from "firebase/firestore";
 import { v4 as uuid } from "uuid";
 
@@ -29,7 +33,7 @@ export type ApiConfig = {
   updateItem: string;
 };
 
-export { where, orderBy };
+export { where, orderBy, arrayUnion, arrayRemove };
 
 export class ClientBase {
   __apiConfig: ApiConfig;
@@ -38,11 +42,15 @@ export class ClientBase {
   __db: Firestore;
   firebaseIdToken: string;
 
-  constructor(firebaseConfig: FirebaseOptions, apiConfig: ApiConfig) {
-    this.__apiConfig = apiConfig;
+  constructor(firebaseConfig: FirebaseOptions, useEmulator: boolean) {
     this.__app = initializeApp(firebaseConfig);
     this.__auth = getAuth(this.__app);
     this.__db = getFirestore();
+
+    if (useEmulator) {
+      connectFirestoreEmulator(this.__db, "localhost", 6969);
+      connectAuthEmulator(this.__auth, "http://localhost:4242");
+    }
   }
 
   authenticate = async () => {
@@ -90,6 +98,24 @@ export class ClientBase {
       });
   };
 
+  getItem = async <T>({
+    collectionId,
+    id,
+  }: {
+    collectionId: string;
+    id: string;
+  }) => {
+    const docRef = doc(this.__db, `${collectionId}/${id}`);
+    const snapshot = await getDoc(docRef);
+    const snapshotData = snapshot.data();
+
+    if (snapshotData) {
+      return { ...snapshotData, id } as unknown as T;
+    }
+
+    return undefined;
+  };
+
   updateItem = async <T>({
     collectionId,
     id,
@@ -102,17 +128,35 @@ export class ClientBase {
     if (id) {
       const docRef = doc(this.__db, `${collectionId}/${id}`);
       const snapshot = await getDoc(docRef);
+      const snapshotData = snapshot.data();
 
-      if (snapshot.exists) {
+      if (snapshotData) {
         await updateDoc(docRef, data);
         return id;
       }
     }
 
+    const createData = {
+      ...data,
+      createdBy: this.__auth.currentUser.uid,
+      createdAt: Date.now(),
+    };
+
     const newDocId = id || uuid();
     const newDocRef = doc(this.__db, `${collectionId}/${newDocId}`);
-    await setDoc(newDocRef, data);
+    await setDoc(newDocRef, createData);
     return newDocId;
+  };
+
+  deleteItem = async <T>({
+    collectionId,
+    id,
+  }: {
+    collectionId: string;
+    id?: string;
+  }) => {
+    const docRef = doc(this.__db, `${collectionId}/${id}`);
+    await deleteDoc(docRef);
   };
 
   watchItem = <T>({
@@ -129,8 +173,9 @@ export class ClientBase {
     const docRef = doc(this.__db, `${collectionId}/${id}`);
     const unsubscribe = onSnapshot(docRef, {
       next: (snapshot) => {
-        const data = snapshot.exists
-          ? ({ ...snapshot.data(), id: snapshot.id } as T)
+        const snapshotData = snapshot.data() as T;
+        const data = snapshotData
+          ? { ...snapshotData, id: snapshot.id }
           : undefined;
         onChange(data);
       },
